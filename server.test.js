@@ -1,109 +1,101 @@
-import request from 'supertest';
-import assert from 'assert';
-import { Server as WebSocketServer } from 'ws';
-import WebSocket from 'ws';
-import net from 'net';
+import request from "supertest";
+import { strict as assert } from "node:assert";
+import WebSocket, { WebSocketServer } from "ws";
+import net from "node:net";
 
-import createServer from './server';
+import createServer from "./server.js";
 
-describe('Server', () => {
-    it('server starts and stops', async () => {
-        const server = createServer();
-        await new Promise(resolve => server.listen(resolve));
-        await new Promise(resolve => server.close(resolve));
+describe("Server", () => {
+  it("server starts and stops", async () => {
+    const server = createServer();
+    await new Promise((resolve) => server.listen(resolve));
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it("should redirect root requests to landing page", async () => {
+    const server = createServer();
+    const res = await request(server).get("/");
+    assert.equal(res.headers.location, "https://localtunnel.github.io/www/");
+  });
+
+  it("should support custom base domains", async () => {
+    const server = createServer({
+      domain: "domain.example.com",
     });
 
-    it('should redirect root requests to landing page', async () => {
-        const server = createServer();
-        const res = await request(server).get('/');
-        assert.equal('https://localtunnel.github.io/www/', res.headers.location);
+    const res = await request(server).get("/");
+    assert.equal(res.headers.location, "https://localtunnel.github.io/www/");
+  });
+
+  it("reject long domain name requests", async () => {
+    const server = createServer();
+    const res = await request(server).get(
+      "/thisdomainisoutsidethesizeofwhatweallowwhichissixtythreecharacters"
+    );
+    assert.equal(
+      res.body.message,
+      "Invalid subdomain. Subdomains must be lowercase and between 4 and 63 alphanumeric characters."
+    );
+  });
+
+  it("should upgrade websocket requests", async () => {
+    const server = createServer({
+      domain: "example.com",
     });
 
-    it('should support custom base domains', async () => {
-        const server = createServer({
-            domain: 'domain.example.com',
-        });
+    await new Promise((resolve) => server.listen(resolve));
 
-        const res = await request(server).get('/');
-        assert.equal('https://localtunnel.github.io/www/', res.headers.location);
-    });
+    try {
+      // Get tunnel info
+      const res = await request(server).get("/?new");
+      const clientId = res.body.id;
 
-    it('reject long domain name requests', async () => {
-        const server = createServer();
-        const res = await request(server).get('/thisdomainisoutsidethesizeofwhatweallowwhichissixtythreecharacters');
-        assert.equal(res.body.message, 'Invalid subdomain. Subdomains must be lowercase and between 4 and 63 alphanumeric characters.');
-    });
+      // Simple echo server
+      const wss = new WebSocketServer({ port: 0 });
+      await new Promise((resolve) => wss.once("listening", resolve));
 
-    it('should upgrade websocket requests', async () => {
-        const hostname = 'websocket-test';
-        const server = createServer({
-            domain: 'example.com',
-        });
-        await new Promise(resolve => server.listen(resolve));
+      // Connect tunnel to echo server
+      const tunnel = net.connect(res.body.port);
+      const wsConn = net.connect(wss.address().port);
+      tunnel.pipe(wsConn).pipe(tunnel);
 
-        const res = await request(server).get('/websocket-test');
-        const localTunnelPort = res.body.port;
+      // Test the WebSocket connection
+      const ws = new WebSocket(`ws://localhost:${server.address().port}`, {
+        headers: { host: `${clientId}.example.com` },
+      });
 
-        const wss = await new Promise((resolve) => {
-            const wsServer = new WebSocketServer({ port: 0 }, () => {
-                resolve(wsServer);
-            });
-        });
+      await new Promise((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("error", reject);
+      });
 
-        const websocketServerPort = wss.address().port;
+      ws.close();
+    } finally {
+      server.close();
+    }
+  });
 
-        const ltSocket = net.createConnection({ port: localTunnelPort });
-        const wsSocket = net.createConnection({ port: websocketServerPort });
-        ltSocket.pipe(wsSocket).pipe(ltSocket);
+  it("should support the /api/tunnels/:id/status endpoint", async () => {
+    const server = createServer();
+    await new Promise((resolve) => server.listen(resolve));
 
-        wss.once('connection', (ws) => {
-            ws.once('message', (message) => {
-                ws.send(message);
-            });
-        });
+    // no such tunnel yet
+    const res = await request(server).get("/api/tunnels/foobar-test/status");
+    assert.equal(res.statusCode, 404);
 
-        const ws = new WebSocket('http://localhost:' + server.address().port, {
-            headers: {
-                host: hostname + '.example.com',
-            }
-        });
+    // request a new client called foobar-test
+    {
+      await request(server).get("/foobar-test");
+    }
 
-        ws.on('open', () => {
-            ws.send('something');
-        });
+    {
+      const res = await request(server).get("/api/tunnels/foobar-test/status");
+      assert.equal(res.statusCode, 200);
+      assert.deepStrictEqual(res.body, {
+        connected_sockets: 0,
+      });
+    }
 
-        await new Promise((resolve) => {
-            ws.once('message', (msg) => {
-                assert.equal(msg, 'something');
-                resolve();
-            });
-        });
-
-        wss.close();
-        await new Promise(resolve => server.close(resolve));
-    });
-
-    it('should support the /api/tunnels/:id/status endpoint', async () => {
-        const server = createServer();
-        await new Promise(resolve => server.listen(resolve));
-
-        // no such tunnel yet
-        const res = await request(server).get('/api/tunnels/foobar-test/status');
-        assert.equal(res.statusCode, 404);
-
-        // request a new client called foobar-test
-        {
-            const res = await request(server).get('/foobar-test');
-        }
-
-        {
-            const res = await request(server).get('/api/tunnels/foobar-test/status');
-            assert.equal(res.statusCode, 200);
-            assert.deepEqual(res.body, {
-                connected_sockets: 0,
-            });
-        }
-
-        await new Promise(resolve => server.close(resolve));
-    });
+    await new Promise((resolve) => server.close(resolve));
+  });
 });
