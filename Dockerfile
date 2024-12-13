@@ -1,13 +1,15 @@
-FROM node:10.1.0-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
 COPY package.json /app/
-COPY yarn.lock /app/
+COPY pnpm-lock.yaml /app/
 
-RUN yarn install --production && yarn cache clean
+RUN apk add --no-cache pnpm && \
+    pnpm install --prod && \
+    pnpm store prune
 
 COPY . /app
 
 ENV NODE_ENV production
-ENTRYPOINT ["node", "-r", "esm", "./bin/server"]
+ENTRYPOINT ["node", "./bin/server"]
