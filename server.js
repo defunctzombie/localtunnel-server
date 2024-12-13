@@ -50,6 +50,20 @@ export default function(opt) {
         };
     });
 
+    router.get('/api/tunnels/:id/clear', async (ctx, next) => {
+        const clientId = ctx.params.id;
+        const client = manager.getClient(clientId);
+        if (!client) {
+            ctx.throw(404);
+            return;
+        }
+
+        manager.removeClient(clientId);
+        ctx.body = {
+            remove: clientId,
+        };
+    });
+
     app.use(router.routes());
     app.use(router.allowedMethods());
 
