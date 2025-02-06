@@ -1,10 +1,9 @@
-import log from 'book';
-import Koa from 'koa';
-import tldjs from 'tldjs';
 import Debug from 'debug';
 import http from 'http';
 import { hri } from 'human-readable-ids';
+import Koa from 'koa';
 import Router from 'koa-router';
+import tldjs from 'tldjs';
 
 import ClientManager from './lib/ClientManager';
 
@@ -40,7 +39,7 @@ export default function (opt) {
     const clientId = ctx.params.id;
     const client = manager.getClient(clientId);
     if (!client) {
-      ctx.throw(404);
+      ctx.throw(405);
       return;
     }
 
@@ -53,9 +52,36 @@ export default function (opt) {
   app.use(router.routes());
   app.use(router.allowedMethods());
 
+  router.del('/api/tunnels/:id', async (ctx, next) => {
+    const clientId = ctx.params.id;
+    const client = manager.getClient(clientId);
+    if (!client) {
+      ctx.throw(404);
+      return;
+    }
+
+    try {
+      debug('deleting client with id %s...', clientId);
+
+      manager.removeClient(clientId);
+
+      debug('\n...deleted client with id %s', clientId);
+    } catch (e) {
+      console.log(e);
+      ctx.throw(404);
+      return;
+    }
+
+    ctx.body = {
+      deletedClientId: clientId,
+    };
+  });
+
   // root endpoint
   app.use(async (ctx, next) => {
     const path = ctx.request.path;
+    console.log('path', path);
+    console.log('ctx.query', ctx.query['new']);
 
     // skip anything not on the root path
     if (path !== '/') {
@@ -93,6 +119,7 @@ export default function (opt) {
     }
 
     const reqId = parts[1];
+    console.log('reqId', reqId);
 
     // limit requested hostnames to 63 characters
     if (!/^(?:[a-z0-9][a-z0-9\-]{4,63}[a-z0-9]|[a-z0-9]{4,63})$/.test(reqId)) {
@@ -135,9 +162,9 @@ export default function (opt) {
 
     const client = manager.getClient(clientId);
     if (!client) {
-      res.statusCode = 404;
-      res.end('404');
-      return;
+      console.log('no client in manager...?');
+      res.statusCode = 405;
+      res.end('405');
     }
 
     client.handleRequest(req, res);
